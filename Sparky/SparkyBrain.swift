@@ -41,8 +41,15 @@ final class SparkyBrain {
 
         // If user talks about symptoms, start triage
         if looksLikeHealthConcern(t) {
-            mode = .triage(step: .intro, ctx: .init())
-            return "I’m here with you. Let’s take this one step at a time."
+            mode = .triage(step: .askRedFlags, ctx: .init())
+            return """
+            I’m here with you. 
+            
+            I’m not a doctor, but I can help you decide what to do next.
+            
+            Are you having severe chest pain, trouble breathing, or face drooping?
+            """
+
         }
 
         // Direct requests
@@ -55,17 +62,11 @@ final class SparkyBrain {
 
     // MARK: - TRIAGE (polished)
 
-    enum TriageStep { case intro, askRedFlags, askUrgency }
+    enum TriageStep { case askRedFlags, askUrgency }
     struct TriageContext { var answeredIntro = false }
 
     private func continueTriage(step: TriageStep, ctx: TriageContext, userText: String) -> String {
         switch step {
-        case .intro:
-            mode = .triage(step: .askRedFlags, ctx: .init())
-            return """
-            I’m not a doctor, but I can help you decide what to do next.
-            Right now, are you having severe chest pain, trouble breathing, or signs of a stroke?
-            """
 
         case .askRedFlags:
             if let ans = parseYesNo(userText) {
@@ -80,7 +81,7 @@ final class SparkyBrain {
                     """
                 } else {
                     mode = .triage(step: .askUrgency, ctx: .init())
-                    return "Okay. Is the problem getting worse quickly, or is the pain very severe — like an 8 out of 10?"
+                    return "Okay. Is the pain getting worse quickly, or is it very severe — like an 8 out of 10?"
                 }
             }
             return "Please say yes or no: severe chest pain, trouble breathing, or stroke signs?"
@@ -128,23 +129,24 @@ final class SparkyBrain {
             Okay. I can set this up for you. Here are two options:
 
             1) \(firstText)
+            
             2) \(secondText)
 
-            Which one do you want — option 1 or option 2?
+            Which one do you want?
             """
         }
     }
 
     private func continuePlanning(careType: String, options: [CarePlanOption], chosenIndex: Int, userText: String) -> String {
         var chosen = chosenIndex
-
-        if options.count > 1 {
-            if userText.contains("2") || userText.contains("option 2") || userText.contains("two") {
-                chosen = 1
-            } else if userText.contains("1") || userText.contains("option 1") || userText.contains("one") {
-                chosen = 0
-            }
+        
+        // If they chose an option (one/two/first/second/1/2), store it and ask for yes/no
+        if options.count > 1, let choice = parseOptionChoice(userText) {
+            chosen = min(choice, options.count - 1)
+            mode = .planning(careType: careType, options: options, chosenIndex: chosen)
+            return "Got it. Say “yes” to confirm the booking, or “no” to choose the other one."
         }
+
 
         // If user confirms yes, book
         if let ans = parseYesNo(userText), ans == true {
@@ -173,11 +175,7 @@ final class SparkyBrain {
             }
         }
 
-        // If they picked an option, ask to confirm
-        if options.count > 1 && (userText.contains("1") || userText.contains("2") || userText.contains("option")) {
-            mode = .planning(careType: careType, options: options, chosenIndex: chosen)
-            return "Got it. Should I book \(formatPlan(options[chosen]))?"
-        }
+
 
         // default prompt
         if options.count > 1 {
@@ -220,6 +218,15 @@ final class SparkyBrain {
         let no  = ["no","nope","nah","don’t","dont","not"]
         if yes.contains(where: t.contains) { return true }
         if no.contains(where: t.contains) { return false }
+        return nil
+    }
+    
+    private func parseOptionChoice(_ t: String) -> Int? {
+        let s = t.lowercased()
+
+        if s.contains("1") || s.contains("one") || s.contains("first") { return 0 }
+        if s.contains("2") || s.contains("two") || s.contains("second") { return 1 }
+
         return nil
     }
 

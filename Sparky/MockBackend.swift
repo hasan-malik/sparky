@@ -46,8 +46,8 @@ final class MockBackend {
 
     private func seedData() {
         providerSlots = [
-            .init(id: "p1", providerName: "Nurse Amina", careType: "clinic",       day: "Monday",    time24: "10:30", isBooked: false),
-            .init(id: "p2", providerName: "Dr. Chen",    careType: "clinic",       day: "Tuesday",   time24: "14:00", isBooked: false),
+            .init(id: "p1", providerName: "Nurse Freda", careType: "clinic",       day: "Monday",    time24: "10:30", isBooked: false),
+            .init(id: "p2", providerName: "Dr. Julian",    careType: "clinic",       day: "Tuesday",   time24: "14:00", isBooked: false),
             .init(id: "p3", providerName: "Dr. Patel",   careType: "clinic",       day: "Wednesday", time24: "09:15", isBooked: false),
 
             .init(id: "m1", providerName: "Counsellor Jo", careType: "mentalHealth", day: "Tuesday", time24: "11:00", isBooked: false),
@@ -57,10 +57,10 @@ final class MockBackend {
         ]
 
         drivers = [
-            .init(id: "d1", driverName: "John (SUV)",   day: "Monday",    pickupTime24: "09:15", isTaken: false),
+            .init(id: "d1", driverName: "Teddy",   day: "Monday",    pickupTime24: "09:15", isTaken: false),
             .init(id: "d2", driverName: "Marie",        day: "Tuesday",   pickupTime24: "10:00", isTaken: false),
             .init(id: "d3", driverName: "Evan (Ramp)",  day: "Wednesday", pickupTime24: "08:30", isTaken: false),
-            .init(id: "d4", driverName: "John (SUV)",   day: "Friday",    pickupTime24: "07:00", isTaken: false),
+            .init(id: "d4", driverName: "Teddy",   day: "Friday",    pickupTime24: "07:00", isTaken: false),
         ]
     }
 

@@ -280,7 +280,7 @@ final class VoiceManager: NSObject, ObservableObject {
         // Cheerful helper tuning
         utterance.rate = 0.50             // faster, more energetic
         utterance.pitchMultiplier = 1.15   // brighter, friendlier
-        utterance.volume = 1.5
+        utterance.volume = 1.0 // maximum
 
 
         speechSynthesizer.speak(utterance)
