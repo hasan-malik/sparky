@@ -38,6 +38,8 @@ final class VoiceManager: NSObject, ObservableObject {
     // ✅ 3-second silence auto-finish
     private var silenceWorkItem: DispatchWorkItem?
     private let silenceSeconds: TimeInterval = 3.0
+    
+    private var didFinalizeThisSession: Bool = false
 
     private let brain = SparkyBrain(backend: MockBackend())
 
@@ -74,8 +76,12 @@ final class VoiceManager: NSObject, ObservableObject {
 
     func toggleListening() {
         if isListening {
-            // ✅ Finalize with what we already heard (don’t cancel and lose it)
-            finalizeCurrentTranscript()
+            if lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                stopListeningSoft()
+                statusText = "Stopped. Tap mic to talk."
+            } else {
+                finalizeCurrentTranscript()
+            }
         } else {
             startListening()
         }
@@ -99,6 +105,7 @@ final class VoiceManager: NSObject, ObservableObject {
         }
 
         lastTranscript = ""
+        didFinalizeThisSession = false
         cancelSilenceTimer()
 
         let newRequest = SFSpeechAudioBufferRecognitionRequest()
@@ -139,6 +146,7 @@ final class VoiceManager: NSObject, ObservableObject {
 
         task = speechRecognizer.recognitionTask(with: newRequest) { [weak self] result, error in
             guard let self else { return }
+            if self.didFinalizeThisSession { return }
 
             if let result = result {
                 let spoken = result.bestTranscription.formattedString
@@ -175,10 +183,12 @@ final class VoiceManager: NSObject, ObservableObject {
 
     /// Finalizes whatever we currently have (used for user tap-to-stop AND silence timeout)
     private func finalizeCurrentTranscript() {
-        // Stop audio collection first so the engine doesn’t keep running
-        stopListeningSoft()
-
+        
+        if didFinalizeThisSession { return }
+        didFinalizeThisSession = true
+        
         cancelSilenceTimer()
+        stopListeningSoft()
 
         let cleaned = lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else {
@@ -241,6 +251,7 @@ final class VoiceManager: NSObject, ObservableObject {
 
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            if self.didFinalizeThisSession { return }
             if self.isListening {
                 self.finalizeCurrentTranscript()
             }
