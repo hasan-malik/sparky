@@ -4,118 +4,130 @@
 //
 //  Created by Hasan Malik on 2026-01-31.
 //
-
 import Foundation
 
 // MARK: - Models
 
-struct ClinicSlot: Codable {
+struct CareProviderSlot: Identifiable, Codable {
     let id: String
-    let day: String
-    let time: String
-    let provider: String
-    let preference: String // "morning" or "afternoon"
+    let providerName: String
+    let careType: String          // "clinic", "mentalHealth", "hospitalTrip"
+    let day: String               // "Monday"
+    let time24: String            // "09:30"
     var isBooked: Bool
 }
 
-struct Driver: Codable {
+struct DriverAvailability: Identifiable, Codable {
     let id: String
-    let name: String
-    let notes: String
-    let availability: [String] // simple strings like "tomorrow morning", "tuesday 9am"
+    let driverName: String
+    let day: String               // "Monday"
+    let pickupTime24: String      // "08:30"
+    var isTaken: Bool
 }
 
-struct DriverOption {
-    let id: String
-    let name: String
-    let whenDescription: String
+struct CarePlanOption: Identifiable {
+    let id = UUID()
+    let careType: String
+    let providerSlot: CareProviderSlot
+    let driver: DriverAvailability
+    let pickupTime24: String
 }
 
-// MARK: - Mock Backend
+// MARK: - Backend
 
 final class MockBackend {
 
-    private var slots: [ClinicSlot] = []
-    private var drivers: [Driver] = []
+    private(set) var providerSlots: [CareProviderSlot] = []
+    private(set) var drivers: [DriverAvailability] = []
 
     init() {
-        loadMockData()
+        seedData()
     }
 
-    private func loadMockData() {
-        // You can expand these anytime. Keep them small for demo clarity.
-        let slotsJSON = """
-        [
-          { "id":"s1", "day":"Monday", "time":"10:30 AM", "provider":"Nurse Amina", "preference":"morning", "isBooked":false },
-          { "id":"s2", "day":"Tuesday", "time":"2:00 PM", "provider":"Dr. Chen", "preference":"afternoon", "isBooked":false },
-          { "id":"s3", "day":"Wednesday", "time":"9:15 AM", "provider":"Dr. Patel", "preference":"morning", "isBooked":false },
-          { "id":"s4", "day":"Thursday", "time":"3:30 PM", "provider":"Nurse Amina", "preference":"afternoon", "isBooked":false }
+    private func seedData() {
+        providerSlots = [
+            .init(id: "p1", providerName: "Nurse Amina", careType: "clinic",       day: "Monday",    time24: "10:30", isBooked: false),
+            .init(id: "p2", providerName: "Dr. Chen",    careType: "clinic",       day: "Tuesday",   time24: "14:00", isBooked: false),
+            .init(id: "p3", providerName: "Dr. Patel",   careType: "clinic",       day: "Wednesday", time24: "09:15", isBooked: false),
+
+            .init(id: "m1", providerName: "Counsellor Jo", careType: "mentalHealth", day: "Tuesday", time24: "11:00", isBooked: false),
+            .init(id: "m2", providerName: "Counsellor Jo", careType: "mentalHealth", day: "Thursday", time24: "15:00", isBooked: false),
+
+            .init(id: "h1", providerName: "Cardiology Intake", careType: "hospitalTrip", day: "Friday", time24: "09:00", isBooked: false)
         ]
-        """
 
-        let driversJSON = """
-        [
-          { "id":"d1", "name":"John", "notes":"SUV, good in snow", "availability":["tomorrow morning","tuesday 9am","thursday afternoon"] },
-          { "id":"d2", "name":"Marie", "notes":"Sedan, can do pharmacy runs", "availability":["monday afternoon","wednesday morning"] },
-          { "id":"d3", "name":"Evan", "notes":"Truck, wheelchair-friendly ramp", "availability":["tomorrow afternoon","friday morning"] }
+        drivers = [
+            .init(id: "d1", driverName: "John (SUV)",   day: "Monday",    pickupTime24: "09:15", isTaken: false),
+            .init(id: "d2", driverName: "Marie",        day: "Tuesday",   pickupTime24: "10:00", isTaken: false),
+            .init(id: "d3", driverName: "Evan (Ramp)",  day: "Wednesday", pickupTime24: "08:30", isTaken: false),
+            .init(id: "d4", driverName: "John (SUV)",   day: "Friday",    pickupTime24: "07:00", isTaken: false),
         ]
-        """
-
-        let decoder = JSONDecoder()
-        self.slots = (try? decoder.decode([ClinicSlot].self, from: Data(slotsJSON.utf8))) ?? []
-        self.drivers = (try? decoder.decode([Driver].self, from: Data(driversJSON.utf8))) ?? []
     }
 
-    // MARK: - Appointments
+    // MARK: - Planning
 
-    func findNextClinicSlot(preference: SparkyBrain.TimePreference) -> ClinicSlot {
-        let prefString = (preference == .morning) ? "morning" : "afternoon"
-        if let s = slots.first(where: { !$0.isBooked && $0.preference == prefString }) {
-            return s
-        }
-        // fallback: any unbooked
-        return slots.first(where: { !$0.isBooked }) ?? ClinicSlot(id: "none", day: "Soon", time: "TBD", provider: "Clinic", preference: prefString, isBooked: false)
-    }
+    func computeCarePlans(for careType: String) -> [CarePlanOption] {
+        let slots = providerSlots.filter { !$0.isBooked && $0.careType == careType }
+        let availableDrivers = drivers.filter { !$0.isTaken }
 
-    func bookClinicSlot(slotID: String) {
-        if let idx = slots.firstIndex(where: { $0.id == slotID }) {
-            slots[idx].isBooked = true
-        }
-    }
+        var options: [CarePlanOption] = []
 
-    // MARK: - Transportation
-
-    func findDriver(forWhen whenText: String) -> DriverOption {
-        let t = whenText.lowercased()
-
-        // naive matching: find a driver whose availability string appears in user text OR shares a keyword
-        for d in drivers {
-            for a in d.availability {
-                let al = a.lowercased()
-                if t.contains(al) || sharesKeyword(t, al) {
-                    return DriverOption(id: d.id, name: d.name, whenDescription: "(\(a))")
+        for slot in slots {
+            for driver in availableDrivers where driver.day == slot.day {
+                // driver pickup must be <= appointment time (simple MVP rule)
+                if timeToMinutes(driver.pickupTime24) <= timeToMinutes(slot.time24) {
+                    options.append(
+                        CarePlanOption(
+                            careType: careType,
+                            providerSlot: slot,
+                            driver: driver,
+                            pickupTime24: driver.pickupTime24
+                        )
+                    )
                 }
             }
         }
 
-        // fallback: first driver with any availability
-        if let d = drivers.first, let a = d.availability.first {
-            return DriverOption(id: d.id, name: d.name, whenDescription: "(\(a))")
+        // Sort by soonest day (rough) then earliest appointment time
+        return options.sorted {
+            dayRank($0.providerSlot.day) < dayRank($1.providerSlot.day)
+            || (dayRank($0.providerSlot.day) == dayRank($1.providerSlot.day)
+                && timeToMinutes($0.providerSlot.time24) < timeToMinutes($1.providerSlot.time24))
         }
-
-        return DriverOption(id: "none", name: "a volunteer", whenDescription: "(soon)")
     }
 
-    func requestRide(driverID: String, when: String) {
-        // For demo: just print; in production you'd write to DB / notify driver
-        print("Ride requested: driver=\(driverID) when=\(when)")
+    // MARK: - Booking
+
+    func book(plan: CarePlanOption) {
+        if let i = providerSlots.firstIndex(where: { $0.id == plan.providerSlot.id }) {
+            providerSlots[i].isBooked = true
+        }
+        if let j = drivers.firstIndex(where: { $0.id == plan.driver.id }) {
+            drivers[j].isTaken = true
+        }
     }
 
-    private func sharesKeyword(_ user: String, _ availability: String) -> Bool {
-        let keys = ["tomorrow","monday","tuesday","wednesday","thursday","friday","morning","afternoon","9","10","2","3"]
-        let u = keys.filter { user.contains($0) }
-        let a = keys.filter { availability.contains($0) }
-        return !Set(u).intersection(Set(a)).isEmpty
+    // MARK: - Helpers
+
+    private func timeToMinutes(_ t: String) -> Int {
+        // "HH:mm"
+        let parts = t.split(separator: ":")
+        guard parts.count == 2 else { return 0 }
+        let h = Int(parts[0]) ?? 0
+        let m = Int(parts[1]) ?? 0
+        return h * 60 + m
+    }
+
+    private func dayRank(_ day: String) -> Int {
+        switch day.lowercased() {
+        case "monday": return 1
+        case "tuesday": return 2
+        case "wednesday": return 3
+        case "thursday": return 4
+        case "friday": return 5
+        case "saturday": return 6
+        case "sunday": return 7
+        default: return 99
+        }
     }
 }
-

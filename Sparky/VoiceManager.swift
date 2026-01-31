@@ -276,29 +276,53 @@ final class VoiceManager: NSObject, ObservableObject {
 
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = pickWarmEnglishVoice()
-        utterance.rate = 0.50          // calmer
-        utterance.pitchMultiplier = 1.12 // slightly brighter / warmer
-        utterance.volume = 1.0
+
+        // Cheerful helper tuning
+        utterance.rate = 0.50             // faster, more energetic
+        utterance.pitchMultiplier = 1.15   // brighter, friendlier
+        utterance.volume = 1.5
+
 
         speechSynthesizer.speak(utterance)
+        
+        // ONE-TIME BOY
+        for v in AVSpeechSynthesisVoice.speechVoices()
+            .filter({ $0.language.hasPrefix("en") }) {
+            print("VOICE:", v.name,
+                  "| lang:", v.language,
+                  "| quality:", v.quality.rawValue,
+                  "| id:", v.identifier)
+        }
+
     }
 
-    /// Picks the best available en-US voice, preferring premium/enhanced.
     private func pickWarmEnglishVoice() -> AVSpeechSynthesisVoice? {
-        let voices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language == "en-US" }
 
-        func score(_ v: AVSpeechSynthesisVoice) -> Int {
-            switch v.quality {
-            case .premium:  return 3
-            case .enhanced: return 2
-            default:        return 1
+        // Voices that tend to sound cheerful + friendly on iOS
+        // (Only used if installed — totally safe)
+        let preferredIDs = [
+            "com.apple.ttsbundle.Samantha-compact",
+            "com.apple.ttsbundle.Ava-compact",
+            "com.apple.ttsbundle.allison-compact"
+        ]
+
+        for id in preferredIDs {
+            if let voice = AVSpeechSynthesisVoice(identifier: id) {
+                return voice
             }
         }
 
-        // Prefer higher quality; if multiple, keep first (system order)
-        return voices.sorted { score($0) > score($1) }.first
+        // Otherwise: best-quality en-US voice available
+        let voices = AVSpeechSynthesisVoice
+            .speechVoices()
+            .filter { $0.language == "en-US" }
+
+        return voices
+            .sorted { $0.quality.rawValue > $1.quality.rawValue }
+            .first
             ?? AVSpeechSynthesisVoice(language: "en-US")
     }
+
 
     private func append(_ role: Role, _ text: String) {
         DispatchQueue.main.async {

@@ -4,283 +4,252 @@
 //
 //  Created by Hasan Malik on 2026-01-31.
 //
-
 import Foundation
 
 final class SparkyBrain {
 
     private let backend: MockBackend
-
-    init(backend: MockBackend) {
-        self.backend = backend
-    }
+    init(backend: MockBackend) { self.backend = backend }
 
     enum Mode {
         case idle
-        case triage(step: TriageStep, context: TriageContext)
-        case appointment(step: AppointmentStep, context: AppointmentContext)
-        case transport(step: TransportStep, context: TransportContext)
+        case triage(step: TriageStep, ctx: TriageContext)
+        case planning(careType: String, options: [CarePlanOption], chosenIndex: Int)
     }
 
     private var mode: Mode = .idle
 
-    // MARK: - Public entry
+    // MARK: - Entry
 
     func handle(userText: String) -> String {
-        let text = userText.lowercased()
+        let t = userText.lowercased()
 
-        // If user says reset-ish, always return to idle
-        if text.contains("start over") || text.contains("reset") || text.contains("nevermind") {
+        // universal commands
+        if t.contains("start over") || t.contains("reset") {
             mode = .idle
-            return "No problem. Do you want help with a care question, an appointment, or a ride?"
+            return "No problem. Tell me what’s going on, and I’ll help with care, appointments, and rides."
         }
 
-        // If we’re mid-flow, continue that flow
         switch mode {
         case .triage(let step, let ctx):
-            return continueTriage(step: step, ctx: ctx, userText: text)
-        case .appointment(let step, let ctx):
-            return continueAppointment(step: step, ctx: ctx, userText: text)
-        case .transport(let step, let ctx):
-            return continueTransport(step: step, ctx: ctx, userText: text)
+            return continueTriage(step: step, ctx: ctx, userText: t)
+        case .planning(let careType, let options, let chosen):
+            return continuePlanning(careType: careType, options: options, chosenIndex: chosen, userText: t)
         case .idle:
             break
         }
 
-        // Otherwise, pick a flow from intent
-        if looksLikeTransport(text) {
-            mode = .transport(step: .askWhen, context: TransportContext())
-            return "Okay — I can help with a ride. What day and time do you need to leave?"
-        }
-
-        if looksLikeAppointment(text) {
-            mode = .appointment(step: .askPreference, context: AppointmentContext())
-            return "Sure. Do mornings or afternoons work better for you?"
-        }
-
-        // Default to triage if user talks about symptoms/feeling unwell/emergency
-        if looksLikeHealthConcern(text) {
-            mode = .triage(step: .intro, context: TriageContext())
+        // If user talks about symptoms, start triage
+        if looksLikeHealthConcern(t) {
+            mode = .triage(step: .intro, ctx: .init())
             return "I’m here with you. Let’s take this one step at a time."
         }
 
-        return "I can help with a care question, an appointment, or a ride. What would you like to do?"
+        // Direct requests
+        if t.contains("ride") || t.contains("drive") || t.contains("transport") {
+            return "Totally. For today’s demo, I’ll set this up when we book an appointment — tell me what care you need first."
+        }
+
+        return "Tell me what’s going on, and I’ll help you figure out the right care and book a ride if needed."
     }
 
-    // MARK: - Intent helpers
+    // MARK: - TRIAGE (polished)
 
-    private func looksLikeHealthConcern(_ t: String) -> Bool {
-        let keywords = ["sick","unwell","fever","pain","dizzy","faint","vomit","cough","injury","emergency","er","hurt","bleeding","anxious","panic"]
-        return keywords.contains(where: t.contains)
-    }
-
-    private func looksLikeAppointment(_ t: String) -> Bool {
-        let keywords = ["appointment","doctor","clinic","nurse","reschedule","book","referral"]
-        return keywords.contains(where: t.contains)
-    }
-
-    private func looksLikeTransport(_ t: String) -> Bool {
-        let keywords = ["ride","drive","transport","pickup","pick up","car","volunteer","hospital trip"]
-        return keywords.contains(where: t.contains)
-    }
-
-    // MARK: - TRIAGE FLOW
-
-    enum TriageStep {
-        case intro
-        case askRedFlags
-        case askUrgency
-    }
-
-    struct TriageContext {
-        var hasRedFlags: Bool? = nil
-        var isUrgent: Bool? = nil
-    }
+    enum TriageStep { case intro, askRedFlags, askUrgency }
+    struct TriageContext { var answeredIntro = false }
 
     private func continueTriage(step: TriageStep, ctx: TriageContext, userText: String) -> String {
-        var ctx = ctx
-
         switch step {
-
         case .intro:
-            mode = .triage(step: .askRedFlags, context: ctx)
+            mode = .triage(step: .askRedFlags, ctx: .init())
             return """
             I’m not a doctor, but I can help you decide what to do next.
-            Let me ask a couple of quick questions.
+            Right now, are you having severe chest pain, trouble breathing, or signs of a stroke?
             """
 
         case .askRedFlags:
             if let ans = parseYesNo(userText) {
-                ctx.hasRedFlags = ans
-
-                if ans == true {
+                if ans {
                     mode = .idle
                     return """
                     Thank you for telling me.
                     That could be serious.
 
                     If you can, please call emergency services right now.
-                    If you’d like, I can help arrange a ride to the hospital once you’re safe.
+                    If you want, I can still help plan a hospital ride after you’re safe.
                     """
                 } else {
-                    mode = .triage(step: .askUrgency, context: ctx)
-                    return """
-                    Okay.
-
-                    Is the problem getting worse quickly,
-                    or is the pain very severe — like an 8 out of 10?
-                    """
+                    mode = .triage(step: .askUrgency, ctx: .init())
+                    return "Okay. Is the problem getting worse quickly, or is the pain very severe — like an 8 out of 10?"
                 }
             }
-
-            return """
-            Just to be sure —
-            are you having severe chest pain,
-            trouble breathing,
-            or signs of a stroke?
-            Please say yes or no.
-            """
+            return "Please say yes or no: severe chest pain, trouble breathing, or stroke signs?"
 
         case .askUrgency:
             if let ans = parseYesNo(userText) {
-                ctx.isUrgent = ans
-                mode = .idle
-
-                if ans == true {
-                    return """
-                    Thanks for letting me know.
-
-                    That sounds urgent.
-                    I recommend going to the clinic today,
-                    or the emergency department if the clinic is closed.
-
-                    Would you like help booking a same-day clinic visit
-                    or arranging a ride?
-                    """
-                } else {
-                    return """
-                    Thank you.
-
-                    This doesn’t sound like an emergency right now.
-                    A clinic visit would be a good next step.
-
-                    I can help book an appointment for you.
-                    Do mornings or afternoons work better?
-                    """
-                }
+                // Decide care type based on urgency + keywords
+                let careType = classifyCareType(from: userText, urgent: ans)
+                return startPlanning(for: careType)
             }
+            return "Would you say it’s getting worse quickly, or the pain is very severe? Please say yes or no."
+        }
+    }
 
+    // MARK: - PLANNING FLOW
+
+    private func startPlanning(for careType: String) -> String {
+        let options = backend.computeCarePlans(for: careType)
+
+        if options.isEmpty {
+            mode = .idle
+            if careType == "hospitalTrip" {
+                return "I couldn’t find a driver and hospital slot that line up right now. I recommend calling the clinic so staff can coordinate manually."
+            }
+            return "I couldn’t find a matching appointment and driver right now. Would you like me to try a different time, or just book the appointment without a ride?"
+        }
+
+        // Offer top 2 for demo
+        let top = Array(options.prefix(2))
+        mode = .planning(careType: careType, options: top, chosenIndex: 0)
+
+        let first = top[0]
+        let firstText = formatPlan(first)
+
+        if top.count == 1 {
             return """
-            Is it getting worse quickly,
-            or is the pain very severe?
-            Please say yes or no.
+            Okay. I can set this up for you.
+
+            Option: \(firstText)
+            Should I book it?
+            """
+        } else {
+            let secondText = formatPlan(top[1])
+            return """
+            Okay. I can set this up for you. Here are two options:
+
+            1) \(firstText)
+            2) \(secondText)
+
+            Which one do you want — option 1 or option 2?
             """
         }
     }
 
-    // MARK: - APPOINTMENT FLOW
+    private func continuePlanning(careType: String, options: [CarePlanOption], chosenIndex: Int, userText: String) -> String {
+        var chosen = chosenIndex
 
-    enum AppointmentStep { case askPreference, proposeSlot, confirm }
-    struct AppointmentContext {
-        var preference: TimePreference? = nil
-        var proposed: ClinicSlot? = nil
-    }
-
-    private func continueAppointment(step: AppointmentStep, ctx: AppointmentContext, userText: String) -> String {
-        var ctx = ctx
-
-        switch step {
-        case .askPreference:
-            if let pref = parseTimePreference(userText) {
-                ctx.preference = pref
-                let slot = backend.findNextClinicSlot(preference: pref)
-                ctx.proposed = slot
-                mode = .appointment(step: .confirm, context: ctx)
-                return "I found an opening: \(slot.day) at \(slot.time) with \(slot.provider). Should I book it?"
+        if options.count > 1 {
+            if userText.contains("2") || userText.contains("option 2") || userText.contains("two") {
+                chosen = 1
+            } else if userText.contains("1") || userText.contains("option 1") || userText.contains("one") {
+                chosen = 0
             }
-            return "Got it. Do mornings or afternoons work better for you?"
+        }
 
-        case .confirm:
-            if let ans = parseYesNo(userText) {
-                if ans == true, let slot = ctx.proposed {
-                    backend.bookClinicSlot(slotID: slot.id)
-                    mode = .idle
-                    return "Done. You’re booked for \(slot.day) at \(slot.time). Do you also need a ride?"
-                } else {
-                    // offer the next best
-                    let slot = backend.findNextClinicSlot(preference: ctx.preference ?? .morning)
-                    ctx.proposed = slot
-                    mode = .appointment(step: .confirm, context: ctx)
-                    return "No worries. How about \(slot.day) at \(slot.time) with \(slot.provider)? Should I book that?"
-                }
-            }
-            return "Should I book that appointment? Please say yes or no."
-
-        case .proposeSlot:
+        // If user confirms yes, book
+        if let ans = parseYesNo(userText), ans == true {
+            let plan = options[chosen]
+            backend.book(plan: plan)
             mode = .idle
-            return "Do you want to book an appointment?"
+
+            return """
+            Done — you’re booked.
+
+            \(formatBooked(plan))
+
+            If anything changes, just tell me “reschedule” and I’ll help.
+            """
+        }
+
+        // If user explicitly says no, offer the other option or bail
+        if let ans = parseYesNo(userText), ans == false {
+            if options.count > 1 {
+                let other = options[1 - chosen]
+                mode = .planning(careType: careType, options: options, chosenIndex: 1 - chosen)
+                return "No problem. How about: \(formatPlan(other)) — should I book that?"
+            } else {
+                mode = .idle
+                return "No worries. Would you like to try a different day, or book the appointment without a ride?"
+            }
+        }
+
+        // If they picked an option, ask to confirm
+        if options.count > 1 && (userText.contains("1") || userText.contains("2") || userText.contains("option")) {
+            mode = .planning(careType: careType, options: options, chosenIndex: chosen)
+            return "Got it. Should I book \(formatPlan(options[chosen]))?"
+        }
+
+        // default prompt
+        if options.count > 1 {
+            return "Say “option 1” or “option 2”, and then say yes to book."
+        } else {
+            return "Should I book it? Please say yes or no."
         }
     }
 
-    // MARK: - TRANSPORT FLOW
+    // MARK: - Classification
 
-    enum TransportStep { case askWhen, proposeDriver, confirm }
-    struct TransportContext {
-        var whenText: String? = nil
-        var proposed: DriverOption? = nil
-    }
+    private func classifyCareType(from t: String, urgent: Bool) -> String {
+        let s = t.lowercased()
 
-    private func continueTransport(step: TransportStep, ctx: TransportContext, userText: String) -> String {
-        var ctx = ctx
-
-        switch step {
-        case .askWhen:
-            // Keep it simple: treat user text as the “when”
-            ctx.whenText = userText
-            let option = backend.findDriver(forWhen: userText)
-            ctx.proposed = option
-            mode = .transport(step: .confirm, context: ctx)
-            return "Okay. \(option.name) can drive you \(option.whenDescription). Should I request that ride?"
-
-        case .confirm:
-            if let ans = parseYesNo(userText) {
-                if ans == true, let opt = ctx.proposed {
-                    backend.requestRide(driverID: opt.id, when: opt.whenDescription)
-                    mode = .idle
-                    return "All set. I requested a ride with \(opt.name) \(opt.whenDescription). Do you need help with anything else?"
-                } else {
-                    let option = backend.findDriver(forWhen: ctx.whenText ?? "soon")
-                    ctx.proposed = option
-                    mode = .transport(step: .confirm, context: ctx)
-                    return "No problem. Another option is \(option.name), \(option.whenDescription). Should I request that one?"
-                }
-            }
-            return "Should I request that ride? Please say yes or no."
-
-        case .proposeDriver:
-            mode = .idle
-            return "Do you want me to request a ride?"
+        // mental health keywords
+        let mh = ["anxious", "panic", "depressed", "hopeless", "overwhelmed", "mental", "stress"]
+        if mh.contains(where: s.contains) {
+            return "mentalHealth"
         }
+
+        // hospital trip keywords (specialist / surgery / cardiac)
+        let hosp = ["surgery", "cardiac", "heart", "specialist", "hospital", "operation"]
+        if hosp.contains(where: s.contains) {
+            return "hospitalTrip"
+        }
+
+        // urgent but not red flags: still clinic by default in demo
+        return "clinic"
     }
 
-    // MARK: - Parsing helpers
+    // MARK: - Helpers
+
+    private func looksLikeHealthConcern(_ t: String) -> Bool {
+        let keywords = ["sick","unwell","fever","pain","dizzy","faint","vomit","cough","injury","hurt","bleeding","anxious","panic","depressed","stress"]
+        return keywords.contains(where: t.contains)
+    }
 
     private func parseYesNo(_ t: String) -> Bool? {
-        let yes = ["yes","yeah","yep","please","sure","ok","okay","do it","book it"]
+        let yes = ["yes","yeah","yep","please","sure","ok","okay","book","confirm","do it"]
         let no  = ["no","nope","nah","don’t","dont","not"]
         if yes.contains(where: t.contains) { return true }
         if no.contains(where: t.contains) { return false }
         return nil
     }
 
-    enum TimePreference { case morning, afternoon }
-    private func parseTimePreference(_ t: String) -> TimePreference? {
-        if t.contains("morn") { return .morning }
-        if t.contains("after") { return .afternoon }
-        // also accept yes/no-ish if user answers weirdly
-        if t.contains("am") { return .morning }
-        if t.contains("pm") { return .afternoon }
-        return nil
+    private func formatPlan(_ p: CarePlanOption) -> String {
+        let care = prettyCare(p.careType)
+        return "\(p.providerSlot.day) at \(prettyTime(p.providerSlot.time24)) for \(care) with \(p.providerSlot.providerName). Ride pickup: \(prettyTime(p.pickupTime24)) with \(p.driver.driverName)."
+    }
+
+    private func formatBooked(_ p: CarePlanOption) -> String {
+        let care = prettyCare(p.careType)
+        return "Appointment: \(p.providerSlot.day) \(prettyTime(p.providerSlot.time24)) with \(p.providerSlot.providerName) (\(care)). Ride: \(p.driver.driverName) pickup at \(prettyTime(p.pickupTime24))."
+    }
+
+    private func prettyCare(_ c: String) -> String {
+        switch c {
+        case "mentalHealth": return "mental health support"
+        case "hospitalTrip": return "a hospital visit"
+        default: return "a clinic visit"
+        }
+    }
+
+    private func prettyTime(_ t: String) -> String {
+        // convert "HH:mm" to "h:mm AM/PM"
+        let parts = t.split(separator: ":")
+        guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]) else { return t }
+        var hour = h
+        let am = hour < 12
+        if hour == 0 { hour = 12 }
+        if hour > 12 { hour -= 12 }
+        let mm = String(format: "%02d", m)
+        return "\(hour):\(mm) \(am ? "AM" : "PM")"
     }
 }
-
