@@ -56,8 +56,12 @@ final class VoiceManager: NSObject, ObservableObject {
                 guard let self else { return }
                 switch authStatus {
                 case .authorized:
-                    self.append(.assistant, "Hi, I’m Sparky. I can help with care questions, appointments, or rides. What’s going on?")
-                    self.speak("Hi, I’m Sparky. I can help with care questions, appointments, or rides. What’s going on?")
+                    self.append(.assistant, """
+                Hi, I’m Sparky!
+                
+                I'm here to help you with care questions, appointments, or rides. What’s going on?
+                """)
+                    self.speak("Hi, I’m Sparky! I'm here to help you with care questions, appointments, or rides. What’s going on?")
                     self.statusText = "Ready."
                 case .denied:
                     self.statusText = "Speech permission denied. Enable it in Settings."

@@ -144,7 +144,11 @@ final class SparkyBrain {
         if options.count > 1, let choice = parseOptionChoice(userText) {
             chosen = min(choice, options.count - 1)
             mode = .planning(careType: careType, options: options, chosenIndex: chosen)
-            return "Got it. Say “yes” to confirm the booking, or “no” to choose the other one."
+            return """
+            Got it. 
+            
+            Say “yes” to confirm the booking, or say “no” to choose another one.
+            """
         }
 
 
