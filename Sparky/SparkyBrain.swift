@@ -60,8 +60,8 @@ final class SparkyBrain {
 
         // Default to triage if user talks about symptoms/feeling unwell/emergency
         if looksLikeHealthConcern(text) {
-            mode = .triage(step: .askRedFlags, context: TriageContext())
-            return "I’m here with you. Quick check: are you having severe chest pain, trouble breathing, or signs of a stroke?"
+            mode = .triage(step: .intro, context: TriageContext())
+            return "I’m here with you. Let’s take this one step at a time."
         }
 
         return "I can help with a care question, an appointment, or a ride. What would you like to do?"
@@ -86,7 +86,12 @@ final class SparkyBrain {
 
     // MARK: - TRIAGE FLOW
 
-    enum TriageStep { case askRedFlags, askUrgency, conclude }
+    enum TriageStep {
+        case intro
+        case askRedFlags
+        case askUrgency
+    }
+
     struct TriageContext {
         var hasRedFlags: Bool? = nil
         var isUrgent: Bool? = nil
@@ -96,18 +101,45 @@ final class SparkyBrain {
         var ctx = ctx
 
         switch step {
+
+        case .intro:
+            mode = .triage(step: .askRedFlags, context: ctx)
+            return """
+            I’m not a doctor, but I can help you decide what to do next.
+            Let me ask a couple of quick questions.
+            """
+
         case .askRedFlags:
             if let ans = parseYesNo(userText) {
                 ctx.hasRedFlags = ans
+
                 if ans == true {
                     mode = .idle
-                    return "Thanks for telling me. That could be an emergency. If you can, call emergency services now. If you want, I can also help arrange a ride to the hospital after you’re safe."
+                    return """
+                    Thank you for telling me.
+                    That could be serious.
+
+                    If you can, please call emergency services right now.
+                    If you’d like, I can help arrange a ride to the hospital once you’re safe.
+                    """
                 } else {
                     mode = .triage(step: .askUrgency, context: ctx)
-                    return "Okay. Is the problem getting worse quickly, or is the pain severe (like 8 out of 10)?"
+                    return """
+                    Okay.
+
+                    Is the problem getting worse quickly,
+                    or is the pain very severe — like an 8 out of 10?
+                    """
                 }
             }
-            return "Just to be sure — is it severe chest pain, trouble breathing, or stroke signs? Please say yes or no."
+
+            return """
+            Just to be sure —
+            are you having severe chest pain,
+            trouble breathing,
+            or signs of a stroke?
+            Please say yes or no.
+            """
 
         case .askUrgency:
             if let ans = parseYesNo(userText) {
@@ -115,15 +147,34 @@ final class SparkyBrain {
                 mode = .idle
 
                 if ans == true {
-                    return "Okay — that sounds urgent. I recommend going to the clinic today, or the emergency department if the clinic is closed. Would you like help booking a same-day clinic slot or arranging a ride?"
+                    return """
+                    Thanks for letting me know.
+
+                    That sounds urgent.
+                    I recommend going to the clinic today,
+                    or the emergency department if the clinic is closed.
+
+                    Would you like help booking a same-day clinic visit
+                    or arranging a ride?
+                    """
                 } else {
-                    return "Thanks. This doesn’t sound like an emergency right now. I recommend a clinic appointment. I can help schedule one — would mornings or afternoons work better?"
+                    return """
+                    Thank you.
+
+                    This doesn’t sound like an emergency right now.
+                    A clinic visit would be a good next step.
+
+                    I can help book an appointment for you.
+                    Do mornings or afternoons work better?
+                    """
                 }
             }
-            return "Would you say it’s getting worse quickly, or the pain is very severe? Please say yes or no."
-        case .conclude:
-            mode = .idle
-            return "Do you want help with an appointment or a ride?"
+
+            return """
+            Is it getting worse quickly,
+            or is the pain very severe?
+            Please say yes or no.
+            """
         }
     }
 
