@@ -12,11 +12,18 @@ import Combine
 
 final class VoiceManager: NSObject, ObservableObject {
 
-    // MARK: - Published UI State
+    enum Role { case user, assistant }
+
+    struct ChatMessage: Identifiable {
+        let id = UUID()
+        let role: Role
+        let text: String
+    }
+
     @Published var statusText: String = "Tap the microphone and talk to Sparky."
     @Published var isListening: Bool = false
+    @Published var messages: [ChatMessage] = []
 
-    // MARK: - Audio / Speech
     private let speechRecognizer: SFSpeechRecognizer? = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private let audioEngine = AVAudioEngine()
     private let speechSynthesizer = AVSpeechSynthesizer()
@@ -25,17 +32,20 @@ final class VoiceManager: NSObject, ObservableObject {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
 
-    // MARK: - Public API
+    // ✅ Keep the latest partial transcript so we can finalize on silence or user stop
+    private var lastTranscript: String = ""
 
-    /// Call from ContentView.onAppear()
+    // ✅ 3-second silence auto-finish
+    private var silenceWorkItem: DispatchWorkItem?
+    private let silenceSeconds: TimeInterval = 3.0
+
+    private let brain = SparkyBrain(backend: MockBackend())
+
+    // MARK: - Permissions
+
     func requestPermissionsOnly() {
         guard let speechRecognizer else {
             statusText = "Speech recognition isn’t available on this device."
-            return
-        }
-
-        if !speechRecognizer.isAvailable {
-            statusText = "Speech recognition is temporarily unavailable."
             return
         }
 
@@ -44,7 +54,9 @@ final class VoiceManager: NSObject, ObservableObject {
                 guard let self else { return }
                 switch authStatus {
                 case .authorized:
-                    self.speak("Hi, I’m Sparky. Tap the microphone and talk to me.")
+                    self.append(.assistant, "Hi, I’m Sparky. I can help with care questions, appointments, or rides. What’s going on?")
+                    self.speak("Hi, I’m Sparky. I can help with care questions, appointments, or rides. What’s going on?")
+                    self.statusText = "Ready."
                 case .denied:
                     self.statusText = "Speech permission denied. Enable it in Settings."
                 case .restricted:
@@ -58,28 +70,27 @@ final class VoiceManager: NSObject, ObservableObject {
         }
     }
 
-    /// Wire this to your mic button.
+    // MARK: - Mic Button
+
     func toggleListening() {
         if isListening {
-            stopListening()
+            // ✅ Finalize with what we already heard (don’t cancel and lose it)
+            finalizeCurrentTranscript()
         } else {
             startListening()
         }
     }
 
-    // MARK: - Listening Lifecycle
+    // MARK: - Listening
 
     private func startListening() {
-        // Ensure speech is authorized before starting
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
             statusText = "Please enable Speech Recognition in Settings."
             return
         }
 
-        // Clean slate
-        stopListening()
+        stopListeningHard() // clean slate
 
-        // Configure audio session (this will also trigger mic permission prompt on first use)
         do {
             try configureAudioSessionForSpeech()
         } catch {
@@ -87,30 +98,27 @@ final class VoiceManager: NSObject, ObservableObject {
             return
         }
 
-        // Build recognition request
+        lastTranscript = ""
+        cancelSilenceTimer()
+
         let newRequest = SFSpeechAudioBufferRecognitionRequest()
         newRequest.shouldReportPartialResults = true
         self.request = newRequest
 
         let inputNode = audioEngine.inputNode
-
-        // ✅ Critical: use inputFormat (simulator-safe)
         let format = inputNode.inputFormat(forBus: 0)
 
-        // Guard against invalid formats (simulator can sometimes be weird)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             statusText = "Mic input not ready. In Simulator: I/O → Audio Input → Mac Microphone."
             cleanupAfterFailedStart()
             return
         }
 
-        // Install tap
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.request?.append(buffer)
         }
 
-        // Start audio engine
         audioEngine.prepare()
         do {
             try audioEngine.start()
@@ -123,7 +131,6 @@ final class VoiceManager: NSObject, ObservableObject {
         isListening = true
         statusText = "Listening…"
 
-        // Start recognition task
         guard let speechRecognizer else {
             statusText = "Speech recognizer not available."
             cleanupAfterFailedStart()
@@ -134,131 +141,180 @@ final class VoiceManager: NSObject, ObservableObject {
             guard let self else { return }
 
             if let result = result {
-                let spokenText = result.bestTranscription.formattedString
+                let spoken = result.bestTranscription.formattedString
+                self.lastTranscript = spoken
+
                 DispatchQueue.main.async {
-                    self.statusText = spokenText.isEmpty ? "Listening…" : "Hearing: “\(spokenText)”"
+                    self.statusText = spoken.isEmpty ? "Listening…" : "Hearing: “\(spoken)”"
                 }
 
+                // ✅ Reset silence timer every time we get an update
+                self.scheduleSilenceFinalize()
+
                 if result.isFinal {
-                    self.handleUserInput(spokenText)
+                    self.finalizeCurrentTranscript()
+                    return
                 }
             }
 
-            if let error = error {
+            // If there’s an error, only show it if we weren’t intentionally stopping
+            if let error = error as NSError? {
+                // Many “errors” are expected when stopping; if we have text, just finalize it.
+                if !self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.finalizeCurrentTranscript()
+                    return
+                }
+
                 DispatchQueue.main.async {
                     self.statusText = "Speech error: \(error.localizedDescription)"
-                    self.stopListening()
+                    self.stopListeningHard()
                 }
             }
         }
     }
 
-    private func stopListening() {
-        // Stop recognition task first
-        task?.cancel()
-        task = nil
+    /// Finalizes whatever we currently have (used for user tap-to-stop AND silence timeout)
+    private func finalizeCurrentTranscript() {
+        // Stop audio collection first so the engine doesn’t keep running
+        stopListeningSoft()
 
-        // End request
-        request?.endAudio()
-        request = nil
+        cancelSilenceTimer()
 
-        // Stop audio engine + remove tap
+        let cleaned = lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else {
+            statusText = "I didn’t catch that. Tap the mic and try again."
+            speak("I didn’t catch that. Tap the mic and try again.")
+            return
+        }
+
+        append(.user, cleaned)
+
+        let reply = brain.handle(userText: cleaned)
+        append(.assistant, reply)
+        speak(reply)
+
+        statusText = "Ready. Tap mic to reply."
+    }
+
+    /// Soft stop: stop engine/tap and end audio, but don’t aggressively “cancel” in a way that loses transcript.
+    private func stopListeningSoft() {
         if audioEngine.isRunning {
             audioEngine.stop()
         }
         audioEngine.inputNode.removeTap(onBus: 0)
 
-        // Deactivate audio session (best practice)
+        request?.endAudio()
+        request = nil
+
+        // Cancelling is fine now because we already captured lastTranscript.
+        task?.cancel()
+        task = nil
+
         try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
 
         isListening = false
     }
 
-    // MARK: - Conversation Handling
+    /// Hard stop: used for cleanup paths
+    private func stopListeningHard() {
+        cancelSilenceTimer()
 
-    private func handleUserInput(_ text: String) {
-        stopListening()
+        task?.cancel()
+        task = nil
 
-        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else {
-            statusText = "I didn’t catch that. Tap the microphone and try again."
-            speak("I didn’t catch that. Tap the microphone and try again.")
-            return
+        request?.endAudio()
+        request = nil
+
+        if audioEngine.isRunning {
+            audioEngine.stop()
         }
+        audioEngine.inputNode.removeTap(onBus: 0)
 
-        statusText = "You said: “\(cleaned)”"
-
-        // For now: demo responses (we’ll replace with triage state machine / AI tool calls)
-        let response = fakeAIResponse(for: cleaned)
-
-        // Small delay so it feels natural
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.speak(response)
-        }
+        try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+        isListening = false
     }
 
-    private func fakeAIResponse(for input: String) -> String {
-        let lower = input.lowercased()
+    // MARK: - Silence Timer
 
-        if lower.contains("sick") || lower.contains("not feeling well") || lower.contains("feel unwell") {
-            return "I’m sorry you’re not feeling well. Are you having chest pain or trouble breathing?"
+    private func scheduleSilenceFinalize() {
+        cancelSilenceTimer()
+
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if self.isListening {
+                self.finalizeCurrentTranscript()
+            }
         }
-
-        if lower.contains("ride") || lower.contains("drive") || lower.contains("transport") {
-            return "Okay. I can help with a ride. What day and time do you need to leave?"
-        }
-
-        if lower.contains("appointment") || lower.contains("doctor") || lower.contains("clinic") || lower.contains("reschedule") {
-            return "I can help with an appointment. Would mornings or afternoons work better?"
-        }
-
-        if lower.contains("emergency") || lower.contains("er") {
-            return "I can help you decide. Are you having severe chest pain, trouble breathing, or signs of a stroke?"
-        }
-
-        return "Thanks. I can help with care questions, appointments, or rides. What would you like to do?"
+        silenceWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + silenceSeconds, execute: item)
     }
 
-    // MARK: - Speech Output
+    private func cancelSilenceTimer() {
+        silenceWorkItem?.cancel()
+        silenceWorkItem = nil
+    }
+
+    // MARK: - Speech Output (Warm / Joyful)
 
     private func speak(_ text: String) {
         statusText = text
 
-        // Stop speaking if already speaking (prevents overlapping)
         if speechSynthesizer.isSpeaking {
             speechSynthesizer.stopSpeaking(at: .immediate)
         }
 
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-        utterance.rate = 0.5
+        utterance.voice = pickWarmEnglishVoice()
+        utterance.rate = 0.50          // calmer
+        utterance.pitchMultiplier = 1.12 // slightly brighter / warmer
+        utterance.volume = 1.0
 
         speechSynthesizer.speak(utterance)
+    }
+
+    /// Picks the best available en-US voice, preferring premium/enhanced.
+    private func pickWarmEnglishVoice() -> AVSpeechSynthesisVoice? {
+        let voices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language == "en-US" }
+
+        func score(_ v: AVSpeechSynthesisVoice) -> Int {
+            switch v.quality {
+            case .premium:  return 3
+            case .enhanced: return 2
+            default:        return 1
+            }
+        }
+
+        // Prefer higher quality; if multiple, keep first (system order)
+        return voices.sorted { score($0) > score($1) }.first
+            ?? AVSpeechSynthesisVoice(language: "en-US")
+    }
+
+    private func append(_ role: Role, _ text: String) {
+        DispatchQueue.main.async {
+            self.messages.append(ChatMessage(role: role, text: text))
+            if self.messages.count > 12 {
+                self.messages.removeFirst(self.messages.count - 12)
+            }
+        }
     }
 
     // MARK: - Audio Session
 
     private func configureAudioSessionForSpeech() throws {
-        // Spoken-audio optimized settings; defaultToSpeaker is important so voice comes out loud.
         try audioSession.setCategory(.playAndRecord,
                                      mode: .spokenAudio,
                                      options: [.defaultToSpeaker, .allowBluetooth])
         try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
     }
 
-    // MARK: - Helpers
-
     private func cleanupAfterFailedStart() {
-        // Ensure we’re not left in a half-running state
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
+        if audioEngine.isRunning { audioEngine.stop() }
         audioEngine.inputNode.removeTap(onBus: 0)
-        task?.cancel()
-        task = nil
-        request?.endAudio()
-        request = nil
+        task?.cancel(); task = nil
+        request?.endAudio(); request = nil
+        cancelSilenceTimer()
         isListening = false
         try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
+
