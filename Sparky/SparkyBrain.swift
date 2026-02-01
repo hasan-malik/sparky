@@ -39,18 +39,14 @@ final class SparkyBrain {
             break
         }
         
-        // Friendly greeting / demo reset
-        if t.contains("hey sparky how are you")
-            || t.contains("hi sparky")
-            || t.contains("hello sparky")
-            || t.contains("how are you") {
-
+        // Conversation reset trigger:
+        if t.contains("how are you") {
             mode = .idle
-            return "Hi! I’m Sparky. I’m here to help with care, appointments, and rides. What’s going on?"
+            return initialGreeting()
         }
 
 
-        // If user talks about symptoms, start triage
+        // If user talks about symptoms, start triage:
         if looksLikeHealthConcern(t) {
             mode = .triage(step: .askRedFlags, ctx: .init())
             return """
@@ -60,10 +56,9 @@ final class SparkyBrain {
             
             Are you having severe chest pain, trouble breathing, or face drooping?
             """
-
         }
 
-        // Direct requests
+        // Direct requests from useR:
         if t.contains("ride") || t.contains("drive") || t.contains("transport") {
             return "Totally. For today’s demo, I’ll set this up when we book an appointment — tell me what care you need first."
         }
@@ -274,4 +269,27 @@ final class SparkyBrain {
         let mm = String(format: "%02d", m)
         return "\(hour):\(mm) \(am ? "AM" : "PM")"
     }
+    
+    // handle the side prompt: Weather!!
+    
+    func initialGreeting() -> String {
+        let w = backend.getWeatherStatus()
+
+        let base = """
+        Hi, I’m Sparky! 
+
+        I'm here to help you with care questions, appointments, or rides.
+        """
+
+        if w.roadsMayBeClosed {
+            return """
+            \(base) What’s going on?
+            
+            \(w.message)
+            """
+        } else {
+            return "\(base) What’s going on?"
+        }
+    }
+
 }

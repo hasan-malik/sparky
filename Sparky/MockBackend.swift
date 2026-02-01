@@ -33,6 +33,13 @@ struct CarePlanOption: Identifiable {
     let pickupTime24: String
 }
 
+struct WeatherStatus {
+    let condition: String        // e.g. "clear", "snowstorm"
+    let roadsMayBeClosed: Bool
+    let message: String          // what Sparky should say
+}
+
+
 // MARK: - Backend
 
 final class MockBackend {
@@ -130,4 +137,18 @@ final class MockBackend {
         default: return 99
         }
     }
+    
+    // side prompt: handle the Weather!
+    
+    private var weather = WeatherStatus(
+            condition: "snowstorm",
+            roadsMayBeClosed: false,
+            message: """
+            WEATHER ALERT: there’s a snowstorm currently and roads may be closed. If you need urgent care, call emergency services. Otherwise, I can help book clinic care and we can plan travel when it’s safe.
+            """
+        )
+
+        func getWeatherStatus() -> WeatherStatus {
+            weather
+        }
 }
