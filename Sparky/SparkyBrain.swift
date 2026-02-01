@@ -38,6 +38,17 @@ final class SparkyBrain {
         case .idle:
             break
         }
+        
+        // Friendly greeting / demo reset
+        if t.contains("hey sparky how are you")
+            || t.contains("hi sparky")
+            || t.contains("hello sparky")
+            || t.contains("how are you") {
+
+            mode = .idle
+            return "Hi! I’m Sparky. I’m here to help with care, appointments, and rides. What’s going on?"
+        }
+
 
         // If user talks about symptoms, start triage
         if looksLikeHealthConcern(t) {
