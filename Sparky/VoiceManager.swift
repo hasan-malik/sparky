@@ -301,30 +301,25 @@ final class VoiceManager: NSObject, ObservableObject {
     }
 
     private func pickWarmEnglishVoice() -> AVSpeechSynthesisVoice? {
-
-        // Voices that tend to sound cheerful + friendly on iOS
-        // (Only used if installed — totally safe)
+        // Prefer enhanced voices first (best quality)
         let preferredIDs = [
-            "com.apple.ttsbundle.Samantha-compact",
-            "com.apple.ttsbundle.Ava-compact",
-            "com.apple.ttsbundle.allison-compact"
+            "com.apple.voice.enhanced.en-US.Evan",
+            "com.apple.voice.enhanced.en-US.Nathan",
+            "com.apple.voice.enhanced.en-US.Joelle",
+
+            // Fall back to nice Siri voices if enhanced isn't available
+            "com.apple.ttsbundle.siri_nicky_en-US_compact",
+            "com.apple.ttsbundle.siri_aaron_en-US_compact",
+
+            // Final fallback
+            "com.apple.voice.compact.en-US.Samantha"
         ]
 
         for id in preferredIDs {
-            if let voice = AVSpeechSynthesisVoice(identifier: id) {
-                return voice
-            }
+            if let v = AVSpeechSynthesisVoice(identifier: id) { return v }
         }
 
-        // Otherwise: best-quality en-US voice available
-        let voices = AVSpeechSynthesisVoice
-            .speechVoices()
-            .filter { $0.language == "en-US" }
-
-        return voices
-            .sorted { $0.quality.rawValue > $1.quality.rawValue }
-            .first
-            ?? AVSpeechSynthesisVoice(language: "en-US")
+        return AVSpeechSynthesisVoice(language: "en-US")
     }
 
 
